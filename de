@@ -1,3 +1,44 @@
-SELECT ProblemId, Status, LEN(Status) as LenStatus, '[' + Status + ']' as StatusDebug
-FROM dbo.DynatraceProblems
-WHERE ProblemId = 'PEGA_AQUI_EL_PROBLEMID';
+[HttpGet("latest")]
+public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
+    [FromQuery] int pageNumber = 1,
+    [FromQuery] int pageSize = 50,
+    [FromQuery] string? jurisdiction = null
+)
+{
+    // ✅ USAR UTC (clave del problema)
+    var startDate = DateTime.UtcNow.Date.AddDays(-1);
+    var endDate   = DateTime.UtcNow;
+
+    var baseQuery = _context.DynatraceProblems
+        .AsNoTracking()
+        .Where(p => p.StartTime >= startDate && p.StartTime < endDate)
+        .Where(p => p.Status == "OPEN");
+
+    if (!string.IsNullOrWhiteSpace(jurisdiction))
+    {
+        baseQuery = baseQuery.Where(p => p.Jurisdiction == jurisdiction);
+    }
+
+    baseQuery = baseQuery.OrderByDescending(p => p.StartTime);
+
+    var totalRecords = await baseQuery.CountAsync();
+
+    var problems = await baseQuery
+        .Skip((pageNumber - 1) * pageSize)
+        .Take(pageSize)
+        .ToListAsync();
+
+    var deserializedProblems = problems
+        .Select(p => convertProblemJSON(p))
+        .Where(p => p != null)
+        .ToList()!;
+
+    return new PagedResponse<ProblemDynatraceResponse>
+    {
+        TotalRecords = totalRecords,
+        TotalPages = (int)Math.Ceiling(totalRecords / (double)pageSize),
+        PageNumber = pageNumber,
+        PageSize = pageSize,
+        Data = deserializedProblems
+    };
+}
