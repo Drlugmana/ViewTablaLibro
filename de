@@ -1,65 +1,16 @@
-namespace RestAPIDynatrace.Controllers              
-{
-    [Route("api/[controller]")]
-    [ApiController]
-    public class ProblemsController : ControllerBase
-    {
-        private readonly AppDbContext _context;
-
-        public ProblemsController(AppDbContext context)
-        {
-            _context = context;
-        }
-
-        // GET: api/Problems
-        [HttpGet]
-        public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblems(int pageNumber = 1, int pageSize = 50)
-        {
-            var totalRecords = await _context.DynatraceProblems.CountAsync();
-            var problems = await _context.DynatraceProblems
-                                         .Skip((pageNumber - 1) * pageSize)
-                                         .Take(pageSize)
-                                         .ToListAsync();
-
-            var deserializedProblems = problems.Select(problem =>
-            {
-                try
-                {
-                    return convertProblemJSON(problem);
-                }
-                catch (JsonException ex)
-                {
-                    return null;
-                }
-            }).Where(p => p != null).ToList();
-
-            var response = new PagedResponse<ProblemDynatraceResponse>
-            {
-                TotalRecords = totalRecords,
-                TotalPages = (int)Math.Ceiling(totalRecords / (double)pageSize),
-                PageNumber = pageNumber,
-                PageSize = pageSize,
-                Data = deserializedProblems
-            };
-
-            return response;
-        }
-
-
         [HttpGet("latest")]
         public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
-           [FromQuery] int pageNumber = 1,
-           [FromQuery] int pageSize = 50,
-           [FromQuery] string? jurisdiction = null
-       )
+             [FromQuery] int pageNumber = 1,
+             [FromQuery] int pageSize = 50,
+             [FromQuery] string? jurisdiction = null
+         )
         {
-            // AYER 00:00 (hora del servidor)
+            // AYER 00:00 (local server time)
             var startDate = DateTime.Today.AddDays(-1);
 
             // AHORA
             var endDate = DateTime.Now;
 
-            // ⚠️ Si tu DBSet NO se llama _context.DynatraceProblems, cámbialo aquí:
             var baseQuery = _context.DynatraceProblems
                 .AsNoTracking()
                 .Where(p => p.StartTime >= startDate && p.StartTime <= endDate);
@@ -79,29 +30,21 @@ namespace RestAPIDynatrace.Controllers
                 .Take(pageSize)
                 .ToListAsync();
 
-            // ✅ NO se pierden alertas por JSON inválido
-            var deserializedProblems = new List<ProblemDynatraceResponse>(problems.Count);
-
-            foreach (var problem in problems)
-            {
-                try
+            // ✅ Mantener tu misma lógica de deserialización
+            var deserializedProblems = problems
+                .Select(problem =>
                 {
-                    var mapped = convertProblemJSON(problem);
-
-                    // si tu convert devuelve null, igual la devolvemos mínimo
-                    deserializedProblems.Add(mapped ?? BuildMinimalResponse(problem));
-                }
-                catch (JsonException)
-                {
-                    // ✅ no se pierde el registro
-                    deserializedProblems.Add(BuildMinimalResponse(problem));
-                }
-                catch
-                {
-                    // por seguridad: cualquier otro error también devuelve mínimo
-                    deserializedProblems.Add(BuildMinimalResponse(problem));
-                }
-            }
+                    try
+                    {
+                        return convertProblemJSON(problem); // <-- usa tu método existente
+                    }
+                    catch (JsonException)
+                    {
+                        return null;
+                    }
+                })
+                .Where(p => p != null)
+                .ToList()!;
 
             var response = new PagedResponse<ProblemDynatraceResponse>
             {
