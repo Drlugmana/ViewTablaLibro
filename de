@@ -1,12 +1,7 @@
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using System.Reflection;
-using System.Text.Json;
-
-namespace RestAPIDynatrace.Controllers
+namespace RestAPIDynatrace.Controllers              
 {
-    [ApiController]
     [Route("api/[controller]")]
+    [ApiController]
     public class ProblemsController : ControllerBase
     {
         private readonly AppDbContext _context;
@@ -16,78 +11,47 @@ namespace RestAPIDynatrace.Controllers
             _context = context;
         }
 
-        // =========================
-        // HELPERS (NO CAMBIAN TU DTO)
-        // =========================
-        private static void TrySet<T>(T obj, string propName, object? value)
+        // GET: api/Problems
+        [HttpGet]
+        public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblems(int pageNumber = 1, int pageSize = 50)
         {
-            var prop = typeof(T).GetProperty(
-                propName,
-                BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase
-            );
+            var totalRecords = await _context.DynatraceProblems.CountAsync();
+            var problems = await _context.DynatraceProblems
+                                         .Skip((pageNumber - 1) * pageSize)
+                                         .Take(pageSize)
+                                         .ToListAsync();
 
-            if (prop == null || !prop.CanWrite) return;
-
-            var targetType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
-
-            if (value == null)
+            var deserializedProblems = problems.Select(problem =>
             {
-                prop.SetValue(obj, null);
-                return;
-            }
+                try
+                {
+                    return convertProblemJSON(problem);
+                }
+                catch (JsonException ex)
+                {
+                    return null;
+                }
+            }).Where(p => p != null).ToList();
 
-            if (targetType.IsAssignableFrom(value.GetType()))
+            var response = new PagedResponse<ProblemDynatraceResponse>
             {
-                prop.SetValue(obj, value);
-                return;
-            }
+                TotalRecords = totalRecords,
+                TotalPages = (int)Math.Ceiling(totalRecords / (double)pageSize),
+                PageNumber = pageNumber,
+                PageSize = pageSize,
+                Data = deserializedProblems
+            };
 
-            try
-            {
-                prop.SetValue(obj, Convert.ChangeType(value, targetType));
-            }
-            catch
-            {
-                // si no puede convertir, no setea y listo (no rompe)
-            }
+            return response;
         }
 
-        // ⚠️ Si tu entidad EF NO se llama DynatraceProblem, cambia este tipo aquí:
-        private static ProblemDynatraceResponse BuildMinimalResponse(DynatraceProblem p)
-        {
-            var r = new ProblemDynatraceResponse();
 
-            // Setea lo que exista en tu DTO (sin romper compilación)
-            TrySet(r, "ProblemId", p.ProblemId);
-            TrySet(r, "Id", p.ProblemId);
-
-            TrySet(r, "DisplayId", p.DisplayId);
-            TrySet(r, "Title", p.Title);
-            TrySet(r, "Status", p.Status);
-            TrySet(r, "Jurisdiction", p.Jurisdiction);
-
-            TrySet(r, "StartTime", p.StartTime);
-            TrySet(r, "EndTime", p.EndTime);
-
-            // opcionales (si existen en tu DTO)
-            TrySet(r, "Environment", p.Environment);
-            TrySet(r, "Tenant", p.Tenant);
-            TrySet(r, "ImpactLevel", p.ImpactLevel);
-            TrySet(r, "SeverityLevel", p.SeverityLevel);
-            TrySet(r, "ShortDescription", p.ShortDescription);
-
-            return r;
-        }
-
-        // ==========================================
-        // ✅ ENDPOINT COMPLETO CORREGIDO (LATEST)
-        // ==========================================
         [HttpGet("latest")]
         public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
-            [FromQuery] int pageNumber = 1,
-            [FromQuery] int pageSize = 50,
-            [FromQuery] string? jurisdiction = null
-        )
+           [FromQuery] int pageNumber = 1,
+           [FromQuery] int pageSize = 50,
+           [FromQuery] string? jurisdiction = null
+       )
         {
             // AYER 00:00 (hora del servidor)
             var startDate = DateTime.Today.AddDays(-1);
@@ -150,14 +114,3 @@ namespace RestAPIDynatrace.Controllers
 
             return response;
         }
-
-        // =====================================================
-        // TU MÉTODO EXISTENTE (NO LO CAMBIO, SOLO LO USO)
-        // =====================================================
-        private ProblemDynatraceResponse? convertProblemJSON(DynatraceProblem problem)
-        {
-            // 👇 aquí va TU implementación actual (déjala tal cual)
-            throw new NotImplementedException();
-        }
-    }
-}
