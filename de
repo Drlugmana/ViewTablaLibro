@@ -1,59 +1,75 @@
-      [HttpGet("latest")]
-      public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
-           [FromQuery] int pageNumber = 1,
-           [FromQuery] int pageSize = 50,
-           [FromQuery] string? jurisdiction = null
-       )
-      {
-          // AYER 00:00 (local server time)
-          var startDate = DateTime.Today.AddDays(-1);
+[HttpGet("latest")]
+public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
+    [FromQuery] int pageNumber = 1,
+    [FromQuery] int pageSize = 50,
+    [FromQuery] string? jurisdiction = null
+)
+{
+    // AYER 00:00 (local server time)
+    var startDate = DateTime.Today.AddDays(-1);
 
-          // AHORA
-          var endDate = DateTime.Now;
+    // AHORA
+    var endDate = DateTime.Now;
 
-          var baseQuery = _context.DynatraceProblems
-              .AsNoTracking()
-              .Where(p => p.StartTime >= startDate && p.StartTime <= endDate);
+    var baseQuery = _context.DynatraceProblems
+        .AsNoTracking()
+        .Where(p => p.StartTime >= startDate && p.StartTime <= endDate)
+        .Where(p => p.Status == "OPEN"); // ✅ tu filtro correcto (solo abiertas)
 
-          if (!string.IsNullOrWhiteSpace(jurisdiction))
-          {
-              baseQuery = baseQuery.Where(p => p.Jurisdiction == jurisdiction);
-          }
+    if (!string.IsNullOrWhiteSpace(jurisdiction))
+    {
+        baseQuery = baseQuery.Where(p => p.Jurisdiction == jurisdiction);
+    }
 
-          // orden: más recientes primero
-          baseQuery = baseQuery.OrderByDescending(p => p.StartTime);
+    // orden: más recientes primero
+    baseQuery = baseQuery.OrderByDescending(p => p.StartTime);
 
-          var totalRecords = await baseQuery.CountAsync();
+    var totalRecords = await baseQuery.CountAsync();
 
-          var problems = await baseQuery
-              .Skip((pageNumber - 1) * pageSize)
-              .Take(pageSize)
-              .ToListAsync();
+    var problems = await baseQuery
+        .Skip((pageNumber - 1) * pageSize)
+        .Take(pageSize)
+        .ToListAsync();
 
-          // ✅ Mantener tu misma lógica de deserialización
-          var deserializedProblems = problems
-              .Select(problem =>
-              {
-                  try
-                  {
-                      return convertProblemJSON(problem); // <-- usa tu método existente
-                  }
-                  catch (JsonException)
-                  {
-                      return null;
-                  }
-              })
-              .Where(p => p != null)
-              .ToList()!;
+    // ✅ NO botar alertas si falla JSON
+    var deserializedProblems = new List<ProblemDynatraceResponse>(problems.Count);
 
-          var response = new PagedResponse<ProblemDynatraceResponse>
-          {
-              TotalRecords = totalRecords,
-              TotalPages = (int)Math.Ceiling(totalRecords / (double)pageSize),
-              PageNumber = pageNumber,
-              PageSize = pageSize,
-              Data = deserializedProblems
-          };
+    foreach (var problem in problems)
+    {
+        try
+        {
+            var mapped = convertProblemJSON(problem); // tu método existente
+            if (mapped != null)
+                deserializedProblems.Add(mapped);
+        }
+        catch (JsonException)
+        {
+            // ✅ Fallback mínimo: la alerta se devuelve igual (NO se pierde)
+            deserializedProblems.Add(new ProblemDynatraceResponse
+            {
+                Tenant = problem.Tenant,
+                Environment = problem.Environment,
+                ProblemId = problem.ProblemId,
+                DisplayId = problem.DisplayId,
+                Title = problem.Title,
+                ImpactLevel = problem.ImpactLevel,
+                SeverityLevel = problem.SeverityLevel,
+                Status = problem.Status,
+                Jurisdiction = problem.Jurisdiction,
+                StartTime = problem.StartTime,
+                EndTime = problem.EndTime
+            });
+        }
+    }
 
-          return response;
-      }
+    var response = new PagedResponse<ProblemDynatraceResponse>
+    {
+        TotalRecords = totalRecords,
+        TotalPages = (int)Math.Ceiling(totalRecords / (double)pageSize),
+        PageNumber = pageNumber,
+        PageSize = pageSize,
+        Data = deserializedProblems
+    };
+
+    return response;
+}
