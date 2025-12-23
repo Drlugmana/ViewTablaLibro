@@ -1,128 +1,59 @@
-[HttpGet("latest")]
-public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
-    [FromQuery] int pageNumber = 1,
-    [FromQuery] int pageSize = 50,
-    [FromQuery] string? jurisdiction = null
-)
-{
-    if (pageNumber < 1) pageNumber = 1;
-    if (pageSize < 1) pageSize = 50;
-    if (pageSize > 1000) pageSize = 1000;
+      [HttpGet("latest")]
+      public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
+           [FromQuery] int pageNumber = 1,
+           [FromQuery] int pageSize = 50,
+           [FromQuery] string? jurisdiction = null
+       )
+      {
+          // AYER 00:00 (local server time)
+          var startDate = DateTime.Today.AddDays(-1);
 
-    // AYER 00:00 (local server time)
-    var startDate = DateTime.Today.AddDays(-1);
+          // AHORA
+          var endDate = DateTime.Now;
 
-    // AHORA (igual que tu SQL: StartTime < GETDATE())
-    var endDate = DateTime.Now;
+          var baseQuery = _context.DynatraceProblems
+              .AsNoTracking()
+              .Where(p => p.StartTime >= startDate && p.StartTime <= endDate);
 
-    var baseQuery = _context.DynatraceProblems
-        .AsNoTracking()
-        .Where(p => p.StartTime >= startDate && p.StartTime < endDate)
-        .Where(p => p.Status == "OPEN"); // ✅ para que coincida con tu filtro
+          if (!string.IsNullOrWhiteSpace(jurisdiction))
+          {
+              baseQuery = baseQuery.Where(p => p.Jurisdiction == jurisdiction);
+          }
 
-    if (!string.IsNullOrWhiteSpace(jurisdiction))
-    {
-        baseQuery = baseQuery.Where(p => p.Jurisdiction == jurisdiction);
-    }
+          // orden: más recientes primero
+          baseQuery = baseQuery.OrderByDescending(p => p.StartTime);
 
-    // orden: más recientes primero
-    baseQuery = baseQuery.OrderByDescending(p => p.StartTime);
+          var totalRecords = await baseQuery.CountAsync();
 
-    var totalRecords = await baseQuery.CountAsync();
+          var problems = await baseQuery
+              .Skip((pageNumber - 1) * pageSize)
+              .Take(pageSize)
+              .ToListAsync();
 
-    var problems = await baseQuery
-        .Skip((pageNumber - 1) * pageSize)
-        .Take(pageSize)
-        .ToListAsync();
+          // ✅ Mantener tu misma lógica de deserialización
+          var deserializedProblems = problems
+              .Select(problem =>
+              {
+                  try
+                  {
+                      return convertProblemJSON(problem); // <-- usa tu método existente
+                  }
+                  catch (JsonException)
+                  {
+                      return null;
+                  }
+              })
+              .Where(p => p != null)
+              .ToList()!;
 
-    // ✅ NO botar registros si falla JSON
-    var deserializedProblems = new List<ProblemDynatraceResponse>(problems.Count);
+          var response = new PagedResponse<ProblemDynatraceResponse>
+          {
+              TotalRecords = totalRecords,
+              TotalPages = (int)Math.Ceiling(totalRecords / (double)pageSize),
+              PageNumber = pageNumber,
+              PageSize = pageSize,
+              Data = deserializedProblems
+          };
 
-    foreach (var problem in problems)
-    {
-        try
-        {
-            var mapped = convertProblemJSON(problem);
-
-            // por seguridad si tu convert devolviera null
-            if (mapped == null)
-            {
-                deserializedProblems.Add(BuildFallback(problem, "convertProblemJSON returned null"));
-            }
-            else
-            {
-                deserializedProblems.Add(mapped);
-            }
-        }
-        catch (JsonException ex)
-        {
-            // ✅ no se pierde el registro: devuelvo fallback
-            _logger?.LogWarning(ex, "JSON inválido. ProblemId={ProblemId}", problem.ProblemId);
-            deserializedProblems.Add(BuildFallback(problem, "Invalid JSON"));
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Error mapeando. ProblemId={ProblemId}", problem.ProblemId);
-            deserializedProblems.Add(BuildFallback(problem, "Mapping error"));
-        }
-    }
-
-    var response = new PagedResponse<ProblemDynatraceResponse>
-    {
-        TotalRecords = totalRecords,
-        TotalPages = (int)Math.Ceiling(totalRecords / (double)pageSize),
-        PageNumber = pageNumber,
-        PageSize = pageSize,
-        Data = deserializedProblems
-    };
-
-    return Ok(response);
-}
-
-// =====================================
-// FALLBACK: devuelve algo aunque el JSON falle
-// =====================================
-private ProblemDynatraceResponse BuildFallback(DynatraceProblem p, string reason)
-{
-    // Si el JSON existe pero viene medio raro, intentamos al menos sacar "title"
-    string? titleFromJson = null;
-    try
-    {
-        var raw = GetRawJson(p);
-        if (!string.IsNullOrWhiteSpace(raw))
-        {
-            var obj = Newtonsoft.Json.Linq.JObject.Parse(raw);
-            titleFromJson = obj["title"]?.ToString();
-        }
-    }
-    catch { /* ignore */ }
-
-    return new ProblemDynatraceResponse
-    {
-        ProblemId = p.ProblemId,
-        DisplayId = p.DisplayId,
-        Title = titleFromJson ?? p.Title ?? "(Sin título)",
-        Environment = p.Environment,
-        Tenant = p.Tenant,
-        Status = p.Status,
-        Jurisdiction = p.Jurisdiction,
-        StartTime = p.StartTime,
-        EndTime = p.EndTime,
-        ImpactLevel = p.ImpactLevel,
-        SeverityLevel = p.SeverityLevel,
-
-        // si tu modelo no tiene Notes, bórralo
-        Notes = $"Fallback used: {reason}"
-    };
-}
-
-// ✅ CAMBIA AQUÍ el nombre real del campo JSON en tu entidad
-private string? GetRawJson(DynatraceProblem p)
-{
-    // Ejemplos:
-    // return p.ProblemJSON;
-    // return p.ProblemJson;
-    // return p.Json;
-
-    return p.ProblemJSON; // <-- AJUSTA ESTE NOMBRE
-}
+          return response;
+      }
