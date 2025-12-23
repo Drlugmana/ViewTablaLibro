@@ -1,97 +1,84 @@
 [HttpGet("latest")]
 public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
+    [FromQuery] int pageNumber = 1,
+    [FromQuery] int pageSize = 50,
     [FromQuery] string? jurisdiction = null
 )
 {
-    // =========================
-    // RANGO DE FECHAS
-    // =========================
-    var startDate = DateTime.Today.AddDays(-1); // ayer 00:00
+    // Ventana de tiempo para CLOSED recientes (ajústalo si quieres)
+    var closedStartDate = DateTime.Today.AddDays(-2);
     var now = DateTime.Now;
 
-    // =========================
-    // 1️⃣ TODOS LOS OPEN TCS (PRIORIDAD)
-    // =========================
-    var openTcs = await _context.DynatraceProblems
+    // 1) TODOS los OPEN (sin paginación aquí, para no "perder" ninguno)
+    var openQuery = _context.DynatraceProblems
         .AsNoTracking()
-        .Where(p =>
-            p.Jurisdiction == "TCS" &&
-            p.Status == "OPEN" &&
-            p.StartTime >= startDate &&
-            p.StartTime <= now
-        )
+        .Where(p => p.Status == "OPEN");
+
+    // Si te mandan jurisdiction por querystring (ej: TCS), lo aplicamos.
+    if (!string.IsNullOrWhiteSpace(jurisdiction))
+        openQuery = openQuery.Where(p => p.Jurisdiction == jurisdiction);
+
+    // 2) POCOS CLOSED recientes (últimos 1-2 días) para que el Front tenga cerradas
+    //    Aquí sí limitamos cantidad (Top 50 por defecto)
+    var closedTop = 50;
+
+    var closedQuery = _context.DynatraceProblems
+        .AsNoTracking()
+        .Where(p => p.Status == "CLOSED"
+                 && p.StartTime >= closedStartDate
+                 && p.StartTime <= now);
+
+    if (!string.IsNullOrWhiteSpace(jurisdiction))
+        closedQuery = closedQuery.Where(p => p.Jurisdiction == jurisdiction);
+
+    // Traemos a memoria: todos los OPEN + top CLOSED recientes
+    var openList = await openQuery
         .OrderByDescending(p => p.StartTime)
         .ToListAsync();
 
-    // =========================
-    // 2️⃣ CLOSED TCS RECIENTES (para que Front funcione)
-    // =========================
-    var closedRecent = await _context.DynatraceProblems
-        .AsNoTracking()
-        .Where(p =>
-            p.Jurisdiction == "TCS" &&
-            p.Status == "CLOSED" &&
-            p.StartTime >= startDate &&
-            p.StartTime <= now
-        )
+    var closedList = await closedQuery
         .OrderByDescending(p => p.StartTime)
-        .Take(20) // 👈 solo algunos
+        .Take(closedTop)
         .ToListAsync();
 
-    // =========================
-    // 3️⃣ NO TCS RECIENTES (OPEN + CLOSED)
-    // =========================
-    var noTcsRecent = await _context.DynatraceProblems
-        .AsNoTracking()
-        .Where(p =>
-            p.Jurisdiction != "TCS" &&
-            (p.Status == "OPEN" || p.Status == "CLOSED") &&
-            p.StartTime >= startDate &&
-            p.StartTime <= now
-        )
-        .OrderByDescending(p => p.StartTime)
-        .Take(20) // 👈 solo algunos
-        .ToListAsync();
-
-    // =========================
-    // UNIÓN FINAL (sin duplicados)
-    // =========================
-    var all = openTcs
-        .Concat(closedRecent)
-        .Concat(noTcsRecent)
+    // 3) Unimos (sin duplicados por ProblemId) y ordenamos por StartTime desc
+    var merged = openList
+        .Concat(closedList)
         .GroupBy(p => p.ProblemId)
         .Select(g => g.First())
         .OrderByDescending(p => p.StartTime)
         .ToList();
 
-    // =========================
-    // DESERIALIZACIÓN (NO SE PIERDE NINGUNA)
-    // =========================
-    var deserializedProblems = new List<ProblemDynatraceResponse>();
+    // 4) Paginación sobre el MERGE final (así ya no se "pierden" OPEN)
+    var totalRecords = merged.Count;
 
-    foreach (var problem in all)
-    {
-        try
-        {
-            var mapped = convertProblemJSON(problem);
-            if (mapped != null)
-                deserializedProblems.Add(mapped);
-        }
-        catch
-        {
-            // Si algo falla, NO rompemos el endpoint
-        }
-    }
+    var page = merged
+        .Skip((pageNumber - 1) * pageSize)
+        .Take(pageSize)
+        .ToList();
 
-    // =========================
-    // RESPUESTA FINAL (MISMA ESTRUCTURA)
-    // =========================
+    // 5) Tu misma lógica de deserialización (sin cambiar tu método)
+    var deserializedProblems = page
+        .Select(problem =>
+        {
+            try
+            {
+                return convertProblemJSON(problem);
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        })
+        .Where(p => p != null)
+        .ToList()!;
+
     var response = new PagedResponse<ProblemDynatraceResponse>
     {
-        TotalRecords = deserializedProblems.Count,
-        TotalPages = 1,
-        PageNumber = 1,
-        PageSize = deserializedProblems.Count,
+        TotalRecords = totalRecords,
+        TotalPages = (int)Math.Ceiling(totalRecords / (double)pageSize),
+        PageNumber = pageNumber,
+        PageSize = pageSize,
         Data = deserializedProblems
     };
 
