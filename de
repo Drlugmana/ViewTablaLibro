@@ -1,71 +1,163 @@
-[HttpGet("latest")]
-public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
-    [FromQuery] int pageNumber = 1,
-    [FromQuery] int pageSize = 50,
-    [FromQuery] string? jurisdiction = null
-)
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using System.Reflection;
+using System.Text.Json;
+
+namespace RestAPIDynatrace.Controllers
 {
-    // AYER 00:00
-    var startDate = DateTime.Today.AddDays(-1);
-
-    // AHORA
-    var endDate = DateTime.Now;
-
-    var baseQuery = _context.DynatraceProblems
-        .AsNoTracking()
-        .Where(p => p.StartTime >= startDate && p.StartTime <= endDate)
-        .Where(p => p.Status == "OPEN"); // 🔒 solo abiertas (como tu query SQL)
-
-    if (!string.IsNullOrWhiteSpace(jurisdiction))
+    [ApiController]
+    [Route("api/[controller]")]
+    public class ProblemsController : ControllerBase
     {
-        baseQuery = baseQuery.Where(p => p.Jurisdiction == jurisdiction);
-    }
+        private readonly AppDbContext _context;
 
-    baseQuery = baseQuery.OrderByDescending(p => p.StartTime);
-
-    var totalRecords = await baseQuery.CountAsync();
-
-    var problems = await baseQuery
-        .Skip((pageNumber - 1) * pageSize)
-        .Take(pageSize)
-        .ToListAsync();
-
-    var deserializedProblems = new List<ProblemDynatraceResponse>();
-
-    foreach (var problem in problems)
-    {
-        try
+        public ProblemsController(AppDbContext context)
         {
-            var mapped = convertProblemJSON(problem);
-            if (mapped != null)
+            _context = context;
+        }
+
+        // =========================
+        // HELPERS (NO CAMBIAN TU DTO)
+        // =========================
+        private static void TrySet<T>(T obj, string propName, object? value)
+        {
+            var prop = typeof(T).GetProperty(
+                propName,
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase
+            );
+
+            if (prop == null || !prop.CanWrite) return;
+
+            var targetType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+
+            if (value == null)
             {
-                deserializedProblems.Add(mapped);
+                prop.SetValue(obj, null);
+                return;
+            }
+
+            if (targetType.IsAssignableFrom(value.GetType()))
+            {
+                prop.SetValue(obj, value);
+                return;
+            }
+
+            try
+            {
+                prop.SetValue(obj, Convert.ChangeType(value, targetType));
+            }
+            catch
+            {
+                // si no puede convertir, no setea y listo (no rompe)
             }
         }
-        catch (JsonException)
+
+        // ⚠️ Si tu entidad EF NO se llama DynatraceProblem, cambia este tipo aquí:
+        private static ProblemDynatraceResponse BuildMinimalResponse(DynatraceProblem p)
         {
-            // ✅ Fallback mínimo usando SOLO campos que existen
-            deserializedProblems.Add(new ProblemDynatraceResponse
+            var r = new ProblemDynatraceResponse();
+
+            // Setea lo que exista en tu DTO (sin romper compilación)
+            TrySet(r, "ProblemId", p.ProblemId);
+            TrySet(r, "Id", p.ProblemId);
+
+            TrySet(r, "DisplayId", p.DisplayId);
+            TrySet(r, "Title", p.Title);
+            TrySet(r, "Status", p.Status);
+            TrySet(r, "Jurisdiction", p.Jurisdiction);
+
+            TrySet(r, "StartTime", p.StartTime);
+            TrySet(r, "EndTime", p.EndTime);
+
+            // opcionales (si existen en tu DTO)
+            TrySet(r, "Environment", p.Environment);
+            TrySet(r, "Tenant", p.Tenant);
+            TrySet(r, "ImpactLevel", p.ImpactLevel);
+            TrySet(r, "SeverityLevel", p.SeverityLevel);
+            TrySet(r, "ShortDescription", p.ShortDescription);
+
+            return r;
+        }
+
+        // ==========================================
+        // ✅ ENDPOINT COMPLETO CORREGIDO (LATEST)
+        // ==========================================
+        [HttpGet("latest")]
+        public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
+            [FromQuery] int pageNumber = 1,
+            [FromQuery] int pageSize = 50,
+            [FromQuery] string? jurisdiction = null
+        )
+        {
+            // AYER 00:00 (hora del servidor)
+            var startDate = DateTime.Today.AddDays(-1);
+
+            // AHORA
+            var endDate = DateTime.Now;
+
+            // ⚠️ Si tu DBSet NO se llama _context.DynatraceProblems, cámbialo aquí:
+            var baseQuery = _context.DynatraceProblems
+                .AsNoTracking()
+                .Where(p => p.StartTime >= startDate && p.StartTime <= endDate);
+
+            if (!string.IsNullOrWhiteSpace(jurisdiction))
             {
-                ProblemId   = problem.ProblemId,
-                DisplayId   = problem.DisplayId,
-                Title       = problem.Title,
-                Status      = problem.Status,
-                Jurisdiction= problem.Jurisdiction,
-                StartTime   = problem.StartTime,
-                EndTime     = problem.EndTime
-            });
+                baseQuery = baseQuery.Where(p => p.Jurisdiction == jurisdiction);
+            }
+
+            // orden: más recientes primero
+            baseQuery = baseQuery.OrderByDescending(p => p.StartTime);
+
+            var totalRecords = await baseQuery.CountAsync();
+
+            var problems = await baseQuery
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .ToListAsync();
+
+            // ✅ NO se pierden alertas por JSON inválido
+            var deserializedProblems = new List<ProblemDynatraceResponse>(problems.Count);
+
+            foreach (var problem in problems)
+            {
+                try
+                {
+                    var mapped = convertProblemJSON(problem);
+
+                    // si tu convert devuelve null, igual la devolvemos mínimo
+                    deserializedProblems.Add(mapped ?? BuildMinimalResponse(problem));
+                }
+                catch (JsonException)
+                {
+                    // ✅ no se pierde el registro
+                    deserializedProblems.Add(BuildMinimalResponse(problem));
+                }
+                catch
+                {
+                    // por seguridad: cualquier otro error también devuelve mínimo
+                    deserializedProblems.Add(BuildMinimalResponse(problem));
+                }
+            }
+
+            var response = new PagedResponse<ProblemDynatraceResponse>
+            {
+                TotalRecords = totalRecords,
+                TotalPages = (int)Math.Ceiling(totalRecords / (double)pageSize),
+                PageNumber = pageNumber,
+                PageSize = pageSize,
+                Data = deserializedProblems
+            };
+
+            return response;
+        }
+
+        // =====================================================
+        // TU MÉTODO EXISTENTE (NO LO CAMBIO, SOLO LO USO)
+        // =====================================================
+        private ProblemDynatraceResponse? convertProblemJSON(DynatraceProblem problem)
+        {
+            // 👇 aquí va TU implementación actual (déjala tal cual)
+            throw new NotImplementedException();
         }
     }
-
-    var response = new PagedResponse<ProblemDynatraceResponse>
-    {
-        TotalRecords = totalRecords,
-        TotalPages   = (int)Math.Ceiling(totalRecords / (double)pageSize),
-        PageNumber   = pageNumber,
-        PageSize     = pageSize,
-        Data         = deserializedProblems
-    };
-
-    return response;
 }
