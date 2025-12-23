@@ -1,59 +1,53 @@
-        [HttpGet("latest")]
-        public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
-             [FromQuery] int pageNumber = 1,
-             [FromQuery] int pageSize = 50,
-             [FromQuery] string? jurisdiction = null
-         )
+[HttpGet("latest")]
+public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
+    [FromQuery] string? jurisdiction = null
+)
+{
+    // AYER 00:00 (local server time)
+    var startDate = DateTime.Today.AddDays(-1);
+
+    // AHORA
+    var endDate = DateTime.Now;
+
+    var baseQuery = _context.DynatraceProblems
+        .AsNoTracking()
+        .Where(p => p.StartTime >= startDate && p.StartTime <= endDate);
+
+    if (!string.IsNullOrWhiteSpace(jurisdiction))
+    {
+        baseQuery = baseQuery.Where(p => p.Jurisdiction == jurisdiction);
+    }
+
+    // orden: más recientes primero
+    baseQuery = baseQuery.OrderByDescending(p => p.StartTime);
+
+    // 🔥 TRAEMOS TODO (sin paginación)
+    var problems = await baseQuery.ToListAsync();
+
+    // Mantener tu lógica de deserialización
+    var deserializedProblems = problems
+        .Select(problem =>
         {
-            // AYER 00:00 (local server time)
-            var startDate = DateTime.Today.AddDays(-1);
-
-            // AHORA
-            var endDate = DateTime.Now;
-
-            var baseQuery = _context.DynatraceProblems
-                .AsNoTracking()
-                .Where(p => p.StartTime >= startDate && p.StartTime <= endDate);
-
-            if (!string.IsNullOrWhiteSpace(jurisdiction))
+            try
             {
-                baseQuery = baseQuery.Where(p => p.Jurisdiction == jurisdiction);
+                return convertProblemJSON(problem);
             }
-
-            // orden: más recientes primero
-            baseQuery = baseQuery.OrderByDescending(p => p.StartTime);
-
-            var totalRecords = await baseQuery.CountAsync();
-
-            var problems = await baseQuery
-                .Skip((pageNumber - 1) * pageSize)
-                .Take(pageSize)
-                .ToListAsync();
-
-            // ✅ Mantener tu misma lógica de deserialización
-            var deserializedProblems = problems
-                .Select(problem =>
-                {
-                    try
-                    {
-                        return convertProblemJSON(problem); // <-- usa tu método existente
-                    }
-                    catch (JsonException)
-                    {
-                        return null;
-                    }
-                })
-                .Where(p => p != null)
-                .ToList()!;
-
-            var response = new PagedResponse<ProblemDynatraceResponse>
+            catch (JsonException)
             {
-                TotalRecords = totalRecords,
-                TotalPages = (int)Math.Ceiling(totalRecords / (double)pageSize),
-                PageNumber = pageNumber,
-                PageSize = pageSize,
-                Data = deserializedProblems
-            };
+                return null;
+            }
+        })
+        .Where(p => p != null)
+        .ToList()!;
 
-            return response;
-        }
+    var response = new PagedResponse<ProblemDynatraceResponse>
+    {
+        TotalRecords = deserializedProblems.Count,
+        TotalPages = 1,
+        PageNumber = 1,
+        PageSize = deserializedProblems.Count,
+        Data = deserializedProblems
+    };
+
+    return response;
+}
