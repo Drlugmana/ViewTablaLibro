@@ -1,87 +1,47 @@
 [HttpGet("latest")]
 public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
-    [FromQuery] int pageNumber = 1,
-    [FromQuery] int pageSize = 50,
     [FromQuery] string? jurisdiction = null
 )
 {
-    // Igual que tu SQL (AYER 00:00 hasta AHORA)
     var startDate = DateTime.Today.AddDays(-1);
     var endDate = DateTime.Now;
 
     var baseQuery = _context.DynatraceProblems
         .AsNoTracking()
         .Where(p => p.StartTime >= startDate && p.StartTime < endDate)
-        .Where(p => p.Status == "OPEN"); // ✅ tu filtro SQL
+        .Where(p => p.Status == "OPEN");
 
     if (!string.IsNullOrWhiteSpace(jurisdiction))
     {
         baseQuery = baseQuery.Where(p => p.Jurisdiction == jurisdiction);
     }
 
-    baseQuery = baseQuery.OrderByDescending(p => p.StartTime);
-
-    var totalRecords = await baseQuery.CountAsync();
-
     var problems = await baseQuery
-        .Skip((pageNumber - 1) * pageSize)
-        .Take(pageSize)
+        .OrderByDescending(p => p.StartTime)
+        .ThenByDescending(p => p.ProblemId)
         .ToListAsync();
 
-    // ✅ NO pierdas registros por JSON inválido
-    var deserializedProblems = new List<ProblemDynatraceResponse>(problems.Count);
-
-    foreach (var problem in problems)
-    {
-        try
+    var deserializedProblems = problems
+        .Select(problem =>
         {
-            var mapped = convertProblemJSON(problem);
-
-            if (mapped != null)
-                deserializedProblems.Add(mapped);
-            else
-                deserializedProblems.Add(new ProblemDynatraceResponse
-                {
-                    problemId = problem.ProblemId,
-                    tenant = problem.Tenant,
-                    environment = problem.Environment,
-                    displayId = problem.DisplayId,
-                    title = problem.Title,
-                    shortDescription = problem.ShortDescription,
-                    impactLevel = problem.ImpactLevel,
-                    severityLevel = problem.SeverityLevel,
-                    status = problem.Status,
-                    jurisdiction = problem.Jurisdiction,
-                    startTime = problem.StartTime,
-                    endTime = problem.EndTime
-                });
-        }
-        catch (JsonException)
-        {
-            deserializedProblems.Add(new ProblemDynatraceResponse
+            try
             {
-                problemId = problem.ProblemId,
-                tenant = problem.Tenant,
-                environment = problem.Environment,
-                displayId = problem.DisplayId,
-                title = problem.Title,
-                shortDescription = problem.ShortDescription,
-                impactLevel = problem.ImpactLevel,
-                severityLevel = problem.SeverityLevel,
-                status = problem.Status,
-                jurisdiction = problem.Jurisdiction,
-                startTime = problem.StartTime,
-                endTime = problem.EndTime
-            });
-        }
-    }
+                return convertProblemJSON(problem);
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        })
+        .Where(p => p != null)
+        .ToList()!;
 
     var response = new PagedResponse<ProblemDynatraceResponse>
     {
-        TotalRecords = totalRecords,
-        TotalPages = (int)Math.Ceiling(totalRecords / (double)pageSize),
-        PageNumber = pageNumber,
-        PageSize = pageSize,
+        TotalRecords = deserializedProblems.Count,
+        TotalPages = 1,
+        PageNumber = 1,
+        PageSize = deserializedProblems.Count,
         Data = deserializedProblems
     };
 
