@@ -5,22 +5,46 @@ public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProb
     [FromQuery] string? jurisdiction = null
 )
 {
-    // Por defecto: TCS (igual que tu SQL)
-    var jurisdictionFilter = string.IsNullOrWhiteSpace(jurisdiction) ? "TCS" : jurisdiction.Trim();
+    var now = DateTime.Now;
 
-    // AHORA (igual que GETDATE())
-    var endDate = DateTime.Now;
+    // CLOSED recientes (ayer + hoy)
+    var closedFrom = DateTime.Today.AddDays(-1);
 
-    var baseQuery = _context.DynatraceProblems
+    // Si no mandan jurisdiction, por defecto trabajamos con TCS (tu caso real)
+    var tcsJurisdiction = string.IsNullOrWhiteSpace(jurisdiction) ? "TCS" : jurisdiction.Trim();
+
+    // === Query principal (TCS): OPEN + CLOSED recientes ===
+    var tcsQuery = _context.DynatraceProblems
         .AsNoTracking()
         .Where(p =>
-            p.Status == "OPEN" &&
-            p.Jurisdiction == jurisdictionFilter &&
-            p.StartTime < endDate
+            p.Jurisdiction == tcsJurisdiction &&
+            (
+                p.Status == "OPEN"
+                || (p.Status == "CLOSED" && p.EndTime != null && p.EndTime >= closedFrom)
+            )
+            && p.StartTime < now
         );
 
-    // orden: más recientes primero
-    baseQuery = baseQuery.OrderByDescending(p => p.StartTime);
+    // === Query extra (NO TCS): solo los más recientes ===
+    // Nota: aquí "NO TCS" depende de cómo lo tengas guardado:
+    // - Jurisdiction == "NO TCS"  (si lo guardas así)
+    // - o Jurisdiction != "TCS"   (si todo lo demás es "no tcs")
+    // Te lo dejo como != TCS para que agarre todos los no-TCS.
+    var noTcsQuery = _context.DynatraceProblems
+        .AsNoTracking()
+        .Where(p =>
+            p.Jurisdiction != "TCS" &&
+            p.Status == "OPEN" &&
+            p.StartTime < now
+        );
+
+    // Unimos ambos: TCS + NoTCS
+    var baseQuery = tcsQuery.Concat(noTcsQuery);
+
+    // Orden: OPEN primero, y dentro por StartTime DESC
+    baseQuery = baseQuery
+        .OrderByDescending(p => p.Status == "OPEN")
+        .ThenByDescending(p => p.StartTime);
 
     var totalRecords = await baseQuery.CountAsync();
 
@@ -29,13 +53,13 @@ public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProb
         .Take(pageSize)
         .ToListAsync();
 
-    // ✅ Mantener tu misma lógica de deserialización
+    // Mantener tu misma lógica de deserialización
     var deserializedProblems = problems
         .Select(problem =>
         {
             try
             {
-                return convertProblemJSON(problem); // tu método existente
+                return convertProblemJSON(problem);
             }
             catch (JsonException)
             {
