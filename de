@@ -1,1 +1,155 @@
-d
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+
+[ApiController]
+[Route("api/[controller]")]
+public class ProblemsController : ControllerBase
+{
+    private readonly AppDbContext _context;
+    private readonly ILogger<ProblemsController> _logger;
+
+    public ProblemsController(AppDbContext context, ILogger<ProblemsController> logger)
+    {
+        _context = context;
+        _logger = logger;
+    }
+
+    [HttpGet("latest")]
+    public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 50,
+        [FromQuery] string? jurisdiction = null
+    )
+    {
+        // sane defaults
+        if (pageNumber < 1) pageNumber = 1;
+        if (pageSize < 1) pageSize = 50;
+        if (pageSize > 1000) pageSize = 1000;
+
+        // MISMA LÓGICA QUE TU SQL:
+        // StartTime >= CONVERT(DATE, GETDATE()-1)  AND StartTime < GETDATE()
+        var startDate = DateTime.Today.AddDays(-1); // ayer 00:00
+        var endDate = DateTime.Now;                 // ahora
+
+        var baseQuery = _context.DynatraceProblems
+            .AsNoTracking()
+            .Where(p => p.StartTime >= startDate && p.StartTime < endDate)
+            .Where(p => p.Status == "OPEN"); // <-- importante: si tu pantalla es Abiertas
+
+        if (!string.IsNullOrWhiteSpace(jurisdiction))
+        {
+            baseQuery = baseQuery.Where(p => p.Jurisdiction == jurisdiction);
+        }
+
+        baseQuery = baseQuery.OrderByDescending(p => p.StartTime);
+
+        var totalRecords = await baseQuery.CountAsync();
+
+        var rows = await baseQuery
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync();
+
+        // ✅ NO BOTAR REGISTROS SI EL JSON VIENE MALO
+        var data = new List<ProblemDynatraceResponse>(rows.Count);
+
+        foreach (var row in rows)
+        {
+            try
+            {
+                // Tu método existente (puede fallar en esas 2 filas)
+                var mapped = convertProblemJSON(row);
+
+                // Si por alguna razón devuelve null, igual hacemos fallback
+                data.Add(mapped ?? BuildFallbackResponse(row, "convertProblemJSON returned null"));
+            }
+            catch (JsonException jex)
+            {
+                _logger.LogWarning(jex, "JSON inválido en ProblemId={ProblemId}. Se devuelve fallback.", row.ProblemId);
+                data.Add(BuildFallbackResponse(row, "Invalid JSON"));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error mapeando ProblemId={ProblemId}. Se devuelve fallback.", row.ProblemId);
+                data.Add(BuildFallbackResponse(row, "Mapping error"));
+            }
+        }
+
+        var response = new PagedResponse<ProblemDynatraceResponse>
+        {
+            TotalRecords = totalRecords,
+            TotalPages = (int)Math.Ceiling(totalRecords / (double)pageSize),
+            PageNumber = pageNumber,
+            PageSize = pageSize,
+            Data = data
+        };
+
+        return Ok(response);
+    }
+
+    // =============================
+    // FALLBACK: no depende del JSON
+    // =============================
+    private ProblemDynatraceResponse BuildFallbackResponse(DynatraceProblem row, string reason)
+    {
+        // Si quieres, intenta sacar "title" del JSON aunque sea inválido (a veces viene “casi válido”)
+        string? titleFromJson = null;
+
+        try
+        {
+            var raw = GetProblemJson(row);
+            if (!string.IsNullOrWhiteSpace(raw))
+            {
+                var obj = JObject.Parse(raw);
+                titleFromJson = obj["title"]?.ToString();
+            }
+        }
+        catch { /* no pasa nada */ }
+
+        return new ProblemDynatraceResponse
+        {
+            ProblemId = row.ProblemId,
+            DisplayId = row.DisplayId,
+            Title = titleFromJson ?? row.Title ?? "(Sin título)",
+            Environment = row.Environment,
+            Tenant = row.Tenant,
+            Status = row.Status,
+            Jurisdiction = row.Jurisdiction,
+            StartTime = row.StartTime,
+            EndTime = row.EndTime,
+            ImpactLevel = row.ImpactLevel,
+            SeverityLevel = row.SeverityLevel,
+
+            // si tu response tiene más campos, déjalos seguros:
+            ImpactedEntities = new List<ImpactedEntityDto>(),
+            EntityTags = new List<EntityTagDto>(),
+
+            // útil para debug (si tu modelo lo permite):
+            Notes = $"Fallback used: {reason}"
+        };
+    }
+
+    // Ajusta esto al nombre real de tu columna JSON
+    private string? GetProblemJson(DynatraceProblem row)
+    {
+        // Ejemplos posibles:
+        // return row.ProblemJSON;
+        // return row.ProblemJson;
+        // return row.Json;
+
+        return row.ProblemJSON; // <-- CAMBIA AQUÍ si tu entidad se llama distinto
+    }
+
+    // ======================================
+    // TU MÉTODO EXISTENTE (NO LO BORRES)
+    // ======================================
+    private ProblemDynatraceResponse convertProblemJSON(DynatraceProblem row)
+    {
+        // Deja tu lógica tal cual la tienes
+        // (Aquí es donde te estaba fallando con 2 filas)
+        // ...
+        throw new NotImplementedException();
+    }
+}
