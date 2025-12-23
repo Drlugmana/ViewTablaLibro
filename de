@@ -1,19 +1,21 @@
 [HttpGet("latest")]
 public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
-     [FromQuery] int pageNumber = 1,
-     [FromQuery] int pageSize = 50,
-     [FromQuery] string? jurisdiction = null
- )
+    [FromQuery] int pageNumber = 1,
+    [FromQuery] int pageSize = 50,
+    [FromQuery] string? jurisdiction = null
+)
 {
-    // AYER 00:00 (local server time)
+    // AYER 00:00 (hora del servidor)
     var startDate = DateTime.Today.AddDays(-1);
 
-    // AHORA
+    // AHORA (igual que tu SQL: StartTime < GETDATE())
     var endDate = DateTime.Now;
 
+    // ✅ Filtros correctos: RANGO + OPEN + Jurisdiction opcional
     var baseQuery = _context.DynatraceProblems
         .AsNoTracking()
-        .Where(p => p.StartTime >= startDate && p.StartTime <= endDate);
+        .Where(p => p.StartTime >= startDate && p.StartTime < endDate)
+        .Where(p => p.Status == "OPEN");
 
     if (!string.IsNullOrWhiteSpace(jurisdiction))
     {
@@ -30,8 +32,8 @@ public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProb
         .Take(pageSize)
         .ToListAsync();
 
-    // ❗ NO eliminar alertas si falla el JSON
-    var deserializedProblems = new List<ProblemDynatraceResponse>();
+    // ✅ NO perder alertas: si falla JSON, devolver mínimo (NO null)
+    var deserializedProblems = new List<ProblemDynatraceResponse>(problems.Count);
 
     foreach (var problem in problems)
     {
@@ -39,19 +41,21 @@ public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProb
         {
             var mapped = convertProblemJSON(problem);
 
+            // Si tu convert devuelve null, igual NO perdemos el registro
             if (mapped != null)
                 deserializedProblems.Add(mapped);
+            else
+                deserializedProblems.Add(BuildMinimal(problem));
         }
         catch (JsonException)
         {
-            // ❗ no se elimina la alerta, solo se ignora el JSON roto
-            // la alerta sigue contando en la paginación
+            deserializedProblems.Add(BuildMinimal(problem));
         }
     }
 
     var response = new PagedResponse<ProblemDynatraceResponse>
     {
-        TotalRecords = totalRecords, // sigue basado en DB
+        TotalRecords = totalRecords,
         TotalPages = (int)Math.Ceiling(totalRecords / (double)pageSize),
         PageNumber = pageNumber,
         PageSize = pageSize,
@@ -59,4 +63,23 @@ public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProb
     };
 
     return response;
+
+    // Local fallback (mínimo) para NO perder alertas
+    ProblemDynatraceResponse BuildMinimal(DynatraceProblem problem)
+    {
+        return new ProblemDynatraceResponse
+        {
+            ProblemId = problem.ProblemId,
+            Tenant = problem.Tenant,
+            Environment = problem.Environment,
+            DisplayId = problem.DisplayId,
+            Title = problem.Title,
+            ImpactLevel = problem.ImpactLevel,
+            SeverityLevel = problem.SeverityLevel,
+            Status = problem.Status,
+            Jurisdiction = problem.Jurisdiction,
+            StartTime = problem.StartTime,
+            EndTime = problem.EndTime
+        };
+    }
 }
