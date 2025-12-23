@@ -5,15 +5,13 @@ public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProb
     [FromQuery] string? jurisdiction = null
 )
 {
-    // AYER 00:00
     var startDate = DateTime.Today.AddDays(-1);
-
-    // AHORA
     var endDate = DateTime.Now;
 
     var baseQuery = _context.DynatraceProblems
         .AsNoTracking()
-        .Where(p => p.StartTime >= startDate && p.StartTime < endDate);
+        .Where(p => p.StartTime >= startDate && p.StartTime < endDate)
+        .Where(p => p.Status == "OPEN"); // ✅ IGUAL que tu SQL
 
     if (!string.IsNullOrWhiteSpace(jurisdiction))
     {
@@ -29,7 +27,8 @@ public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProb
         .Take(pageSize)
         .ToListAsync();
 
-    var deserializedProblems = new List<ProblemDynatraceResponse>();
+    // ✅ NO botar alertas si falla el JSON: devolvemos mínimo desde BD
+    var deserializedProblems = new List<ProblemDynatraceResponse>(problems.Count);
 
     foreach (var problem in problems)
     {
@@ -40,23 +39,41 @@ public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProb
             {
                 deserializedProblems.Add(mapped);
             }
+            else
+            {
+                deserializedProblems.Add(new ProblemDynatraceResponse
+                {
+                    tenant = problem.Tenant,
+                    environment = problem.Environment,
+                    problemId = problem.ProblemId,
+                    displayId = problem.DisplayId,
+                    title = problem.Title,
+                    shortDescription = problem.ShortDescription,
+                    impactLevel = problem.ImpactLevel,
+                    severityLevel = problem.SeverityLevel,
+                    status = problem.Status,
+                    jurisdiction = problem.Jurisdiction,
+                    startTime = problem.StartTime,
+                    endTime = problem.EndTime
+                });
+            }
         }
         catch (JsonException)
         {
-            // ⚠️ NO SE PIERDE LA ALERTA
             deserializedProblems.Add(new ProblemDynatraceResponse
             {
-                ProblemId = problem.ProblemId,
-                Tenant = problem.Tenant,
-                Environment = problem.Environment,
-                DisplayId = problem.DisplayId,
-                Title = problem.Title,
-                ImpactLevel = problem.ImpactLevel,
-                SeverityLevel = problem.SeverityLevel,
-                Status = problem.Status,
-                Jurisdiction = problem.Jurisdiction,
-                StartTime = problem.StartTime,
-                EndTime = problem.EndTime
+                tenant = problem.Tenant,
+                environment = problem.Environment,
+                problemId = problem.ProblemId,
+                displayId = problem.DisplayId,
+                title = problem.Title,
+                shortDescription = problem.ShortDescription,
+                impactLevel = problem.ImpactLevel,
+                severityLevel = problem.SeverityLevel,
+                status = problem.Status,
+                jurisdiction = problem.Jurisdiction,
+                startTime = problem.StartTime,
+                endTime = problem.EndTime
             });
         }
     }
