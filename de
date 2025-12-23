@@ -1,49 +1,59 @@
-[HttpGet("latest")]
-public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
-    [FromQuery] string? jurisdiction = null
-)
-{
-    var startDate = DateTime.Today.AddDays(-1);
-    var endDate = DateTime.Now;
-
-    var baseQuery = _context.DynatraceProblems
-        .AsNoTracking()
-        .Where(p => p.StartTime >= startDate && p.StartTime < endDate)
-        .Where(p => p.Status == "OPEN");
-
-    if (!string.IsNullOrWhiteSpace(jurisdiction))
-    {
-        baseQuery = baseQuery.Where(p => p.Jurisdiction == jurisdiction);
-    }
-
-    var problems = await baseQuery
-        .OrderByDescending(p => p.StartTime)
-        .ThenByDescending(p => p.ProblemId)
-        .ToListAsync();
-
-    var deserializedProblems = problems
-        .Select(problem =>
+        [HttpGet("latest")]
+        public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
+             [FromQuery] int pageNumber = 1,
+             [FromQuery] int pageSize = 50,
+             [FromQuery] string? jurisdiction = null
+         )
         {
-            try
-            {
-                return convertProblemJSON(problem);
-            }
-            catch (JsonException)
-            {
-                return null;
-            }
-        })
-        .Where(p => p != null)
-        .ToList()!;
+            // AYER 00:00 (local server time)
+            var startDate = DateTime.Today.AddDays(-1);
 
-    var response = new PagedResponse<ProblemDynatraceResponse>
-    {
-        TotalRecords = deserializedProblems.Count,
-        TotalPages = 1,
-        PageNumber = 1,
-        PageSize = deserializedProblems.Count,
-        Data = deserializedProblems
-    };
+            // AHORA
+            var endDate = DateTime.Now;
 
-    return response;
-}
+            var baseQuery = _context.DynatraceProblems
+                .AsNoTracking()
+                .Where(p => p.StartTime >= startDate && p.StartTime <= endDate);
+
+            if (!string.IsNullOrWhiteSpace(jurisdiction))
+            {
+                baseQuery = baseQuery.Where(p => p.Jurisdiction == jurisdiction);
+            }
+
+            // orden: más recientes primero
+            baseQuery = baseQuery.OrderByDescending(p => p.StartTime);
+
+            var totalRecords = await baseQuery.CountAsync();
+
+            var problems = await baseQuery
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .ToListAsync();
+
+            // ✅ Mantener tu misma lógica de deserialización
+            var deserializedProblems = problems
+                .Select(problem =>
+                {
+                    try
+                    {
+                        return convertProblemJSON(problem); // <-- usa tu método existente
+                    }
+                    catch (JsonException)
+                    {
+                        return null;
+                    }
+                })
+                .Where(p => p != null)
+                .ToList()!;
+
+            var response = new PagedResponse<ProblemDynatraceResponse>
+            {
+                TotalRecords = totalRecords,
+                TotalPages = (int)Math.Ceiling(totalRecords / (double)pageSize),
+                PageNumber = pageNumber,
+                PageSize = pageSize,
+                Data = deserializedProblems
+            };
+
+            return response;
+        }
