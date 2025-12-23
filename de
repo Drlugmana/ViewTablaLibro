@@ -1,53 +1,74 @@
-[HttpGet("latest")]
-public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
-    [FromQuery] string? jurisdiction = null
-)
-{
-    // AYER 00:00 (local server time)
-    var startDate = DateTime.Today.AddDays(-1);
+// src/api/problems.js
 
-    // AHORA
-    var endDate = DateTime.Now;
+// Base relativa (mismo host del Front). Ideal para IIS + Reverse Proxy.
+// Puedes sobreescribirlo con VITE_API_URL=/api en .env
+const API_BASE =
+  import.meta?.env?.VITE_API_URL ||
+  import.meta?.env?.VITE_API_BASE_URL ||
+  import.meta?.env?.VITE_API ||
+  window?.API_BASE_URL ||
+  "/api";
 
-    var baseQuery = _context.DynatraceProblems
-        .AsNoTracking()
-        .Where(p => p.StartTime >= startDate && p.StartTime <= endDate);
+function buildUrl(path, params = {}) {
+  // Si API_BASE es relativo (/api), construimos contra el origin actual
+  const base = API_BASE.startsWith("http")
+    ? API_BASE
+    : `${window.location.origin}${API_BASE}`;
 
-    if (!string.IsNullOrWhiteSpace(jurisdiction))
-    {
-        baseQuery = baseQuery.Where(p => p.Jurisdiction == jurisdiction);
+  // 🔥 CLAVE: asegurar que base termine en "/" y que path NO empiece con "/"
+  const normalizedBase = base.endsWith("/") ? base : `${base}/`;
+  const normalizedPath = String(path).replace(/^\/+/, ""); // quita "/" al inicio
+
+  const url = new URL(normalizedPath, normalizedBase);
+
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && String(v).trim() !== "") {
+      url.searchParams.set(k, String(v));
     }
+  });
 
-    // orden: más recientes primero
-    baseQuery = baseQuery.OrderByDescending(p => p.StartTime);
+  return url.toString();
+}
 
-    // 🔥 TRAEMOS TODO (sin paginación)
-    var problems = await baseQuery.ToListAsync();
+async function safeReadJson(res) {
+  const ct = res.headers.get("content-type") || "";
+  if (ct.includes("application/json")) return await res.json();
 
-    // Mantener tu lógica de deserialización
-    var deserializedProblems = problems
-        .Select(problem =>
-        {
-            try
-            {
-                return convertProblemJSON(problem);
-            }
-            catch (JsonException)
-            {
-                return null;
-            }
-        })
-        .Where(p => p != null)
-        .ToList()!;
+  const txt = await res.text();
+  try {
+    return JSON.parse(txt);
+  } catch {
+    return { data: [], raw: txt };
+  }
+}
 
-    var response = new PagedResponse<ProblemDynatraceResponse>
-    {
-        TotalRecords = deserializedProblems.Count,
-        TotalPages = 1,
-        PageNumber = 1,
-        PageSize = deserializedProblems.Count,
-        Data = deserializedProblems
-    };
+/**
+ * GET /api/Problems/latest
+ * (En IIS realmente llamamos /api/... y el web.config lo manda al backend)
+ */
+export async function getLatestProblems({ pageNumber = 1, pageSize = 1000, jurisdiction } = {}) {
+  // 👇 puedes pasar "Problems/latest" o "/Problems/latest"
+  // con este fix ambos funcionan
+  const url = buildUrl("Problems/latest", { pageNumber, pageSize, jurisdiction });
 
-    return response;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: { Accept: "application/json, text/plain, */*" },
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`Error ${res.status} llamando ${url}\n${txt}`);
+  }
+
+  const json = await safeReadJson(res);
+
+  if (json && Array.isArray(json.data)) return json;
+
+  // fallback si viniera un array directo
+  if (Array.isArray(json)) {
+    return { totalRecords: json.length, totalPages: 1, pageNumber, pageSize, data: json };
+  }
+
+  return { totalRecords: 0, totalPages: 0, pageNumber, pageSize, data: [] };
 }
