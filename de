@@ -1,80 +1,97 @@
 [HttpGet("latest")]
 public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
-    [FromQuery] int pageNumber = 1,
-    [FromQuery] int pageSize = 50,
     [FromQuery] string? jurisdiction = null
 )
 {
+    // =========================
+    // RANGO DE FECHAS
+    // =========================
+    var startDate = DateTime.Today.AddDays(-1); // ayer 00:00
     var now = DateTime.Now;
 
-    // CLOSED recientes (ayer + hoy)
-    var closedFrom = DateTime.Today.AddDays(-1);
-
-    // Si no mandan jurisdiction, por defecto trabajamos con TCS (tu caso real)
-    var tcsJurisdiction = string.IsNullOrWhiteSpace(jurisdiction) ? "TCS" : jurisdiction.Trim();
-
-    // === Query principal (TCS): OPEN + CLOSED recientes ===
-    var tcsQuery = _context.DynatraceProblems
+    // =========================
+    // 1️⃣ TODOS LOS OPEN TCS (PRIORIDAD)
+    // =========================
+    var openTcs = await _context.DynatraceProblems
         .AsNoTracking()
         .Where(p =>
-            p.Jurisdiction == tcsJurisdiction &&
-            (
-                p.Status == "OPEN"
-                || (p.Status == "CLOSED" && p.EndTime != null && p.EndTime >= closedFrom)
-            )
-            && p.StartTime < now
-        );
+            p.Jurisdiction == "TCS" &&
+            p.Status == "OPEN" &&
+            p.StartTime >= startDate &&
+            p.StartTime <= now
+        )
+        .OrderByDescending(p => p.StartTime)
+        .ToListAsync();
 
-    // === Query extra (NO TCS): solo los más recientes ===
-    // Nota: aquí "NO TCS" depende de cómo lo tengas guardado:
-    // - Jurisdiction == "NO TCS"  (si lo guardas así)
-    // - o Jurisdiction != "TCS"   (si todo lo demás es "no tcs")
-    // Te lo dejo como != TCS para que agarre todos los no-TCS.
-    var noTcsQuery = _context.DynatraceProblems
+    // =========================
+    // 2️⃣ CLOSED TCS RECIENTES (para que Front funcione)
+    // =========================
+    var closedRecent = await _context.DynatraceProblems
+        .AsNoTracking()
+        .Where(p =>
+            p.Jurisdiction == "TCS" &&
+            p.Status == "CLOSED" &&
+            p.StartTime >= startDate &&
+            p.StartTime <= now
+        )
+        .OrderByDescending(p => p.StartTime)
+        .Take(20) // 👈 solo algunos
+        .ToListAsync();
+
+    // =========================
+    // 3️⃣ NO TCS RECIENTES (OPEN + CLOSED)
+    // =========================
+    var noTcsRecent = await _context.DynatraceProblems
         .AsNoTracking()
         .Where(p =>
             p.Jurisdiction != "TCS" &&
-            p.Status == "OPEN" &&
-            p.StartTime < now
-        );
-
-    // Unimos ambos: TCS + NoTCS
-    var baseQuery = tcsQuery.Concat(noTcsQuery);
-
-    // Orden: OPEN primero, y dentro por StartTime DESC
-    baseQuery = baseQuery
-        .OrderByDescending(p => p.Status == "OPEN")
-        .ThenByDescending(p => p.StartTime);
-
-    var totalRecords = await baseQuery.CountAsync();
-
-    var problems = await baseQuery
-        .Skip((pageNumber - 1) * pageSize)
-        .Take(pageSize)
+            (p.Status == "OPEN" || p.Status == "CLOSED") &&
+            p.StartTime >= startDate &&
+            p.StartTime <= now
+        )
+        .OrderByDescending(p => p.StartTime)
+        .Take(20) // 👈 solo algunos
         .ToListAsync();
 
-    // Mantener tu misma lógica de deserialización
-    var deserializedProblems = problems
-        .Select(problem =>
-        {
-            try
-            {
-                return convertProblemJSON(problem);
-            }
-            catch (JsonException)
-            {
-                return null;
-            }
-        })
-        .Where(p => p != null)
-        .ToList()!;
+    // =========================
+    // UNIÓN FINAL (sin duplicados)
+    // =========================
+    var all = openTcs
+        .Concat(closedRecent)
+        .Concat(noTcsRecent)
+        .GroupBy(p => p.ProblemId)
+        .Select(g => g.First())
+        .OrderByDescending(p => p.StartTime)
+        .ToList();
 
+    // =========================
+    // DESERIALIZACIÓN (NO SE PIERDE NINGUNA)
+    // =========================
+    var deserializedProblems = new List<ProblemDynatraceResponse>();
+
+    foreach (var problem in all)
+    {
+        try
+        {
+            var mapped = convertProblemJSON(problem);
+            if (mapped != null)
+                deserializedProblems.Add(mapped);
+        }
+        catch
+        {
+            // Si algo falla, NO rompemos el endpoint
+        }
+    }
+
+    // =========================
+    // RESPUESTA FINAL (MISMA ESTRUCTURA)
+    // =========================
     var response = new PagedResponse<ProblemDynatraceResponse>
     {
-        TotalRecords = totalRecords,
-        TotalPages = (int)Math.Ceiling(totalRecords / (double)pageSize),
-        PageNumber = pageNumber,
-        PageSize = pageSize,
+        TotalRecords = deserializedProblems.Count,
+        TotalPages = 1,
+        PageNumber = 1,
+        PageSize = deserializedProblems.Count,
         Data = deserializedProblems
     };
 
