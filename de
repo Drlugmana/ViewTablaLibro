@@ -5,7 +5,7 @@ public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProb
     [FromQuery] string? jurisdiction = null
 )
 {
-    // AYER 00:00 (local server time)
+    // AYER 00:00
     var startDate = DateTime.Today.AddDays(-1);
 
     // AHORA
@@ -14,14 +14,13 @@ public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProb
     var baseQuery = _context.DynatraceProblems
         .AsNoTracking()
         .Where(p => p.StartTime >= startDate && p.StartTime <= endDate)
-        .Where(p => p.Status == "OPEN"); // ✅ tu filtro correcto (solo abiertas)
+        .Where(p => p.Status == "OPEN"); // 🔒 solo abiertas (como tu query SQL)
 
     if (!string.IsNullOrWhiteSpace(jurisdiction))
     {
         baseQuery = baseQuery.Where(p => p.Jurisdiction == jurisdiction);
     }
 
-    // orden: más recientes primero
     baseQuery = baseQuery.OrderByDescending(p => p.StartTime);
 
     var totalRecords = await baseQuery.CountAsync();
@@ -31,33 +30,30 @@ public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProb
         .Take(pageSize)
         .ToListAsync();
 
-    // ✅ NO botar alertas si falla JSON
-    var deserializedProblems = new List<ProblemDynatraceResponse>(problems.Count);
+    var deserializedProblems = new List<ProblemDynatraceResponse>();
 
     foreach (var problem in problems)
     {
         try
         {
-            var mapped = convertProblemJSON(problem); // tu método existente
+            var mapped = convertProblemJSON(problem);
             if (mapped != null)
+            {
                 deserializedProblems.Add(mapped);
+            }
         }
         catch (JsonException)
         {
-            // ✅ Fallback mínimo: la alerta se devuelve igual (NO se pierde)
+            // ✅ Fallback mínimo usando SOLO campos que existen
             deserializedProblems.Add(new ProblemDynatraceResponse
             {
-                Tenant = problem.Tenant,
-                Environment = problem.Environment,
-                ProblemId = problem.ProblemId,
-                DisplayId = problem.DisplayId,
-                Title = problem.Title,
-                ImpactLevel = problem.ImpactLevel,
-                SeverityLevel = problem.SeverityLevel,
-                Status = problem.Status,
-                Jurisdiction = problem.Jurisdiction,
-                StartTime = problem.StartTime,
-                EndTime = problem.EndTime
+                ProblemId   = problem.ProblemId,
+                DisplayId   = problem.DisplayId,
+                Title       = problem.Title,
+                Status      = problem.Status,
+                Jurisdiction= problem.Jurisdiction,
+                StartTime   = problem.StartTime,
+                EndTime     = problem.EndTime
             });
         }
     }
@@ -65,10 +61,10 @@ public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProb
     var response = new PagedResponse<ProblemDynatraceResponse>
     {
         TotalRecords = totalRecords,
-        TotalPages = (int)Math.Ceiling(totalRecords / (double)pageSize),
-        PageNumber = pageNumber,
-        PageSize = pageSize,
-        Data = deserializedProblems
+        TotalPages   = (int)Math.Ceiling(totalRecords / (double)pageSize),
+        PageNumber   = pageNumber,
+        PageSize     = pageSize,
+        Data         = deserializedProblems
     };
 
     return response;
