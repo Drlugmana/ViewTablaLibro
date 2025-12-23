@@ -5,13 +5,16 @@ public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProb
     [FromQuery] string? jurisdiction = null
 )
 {
+    // Igual que tu SQL:
+    // StartTime >= CONVERT(DATE, GETDATE()-1)
+    // StartTime < GETDATE()
     var startDate = DateTime.Today.AddDays(-1);
     var endDate = DateTime.Now;
 
     var baseQuery = _context.DynatraceProblems
         .AsNoTracking()
         .Where(p => p.StartTime >= startDate && p.StartTime < endDate)
-        .Where(p => p.Status == "OPEN"); // ✅ IGUAL que tu SQL
+        .Where(p => p.Status == "OPEN"); // ✅ filtro OPEN (te faltaba)
 
     if (!string.IsNullOrWhiteSpace(jurisdiction))
     {
@@ -27,40 +30,23 @@ public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProb
         .Take(pageSize)
         .ToListAsync();
 
-    // ✅ NO botar alertas si falla el JSON: devolvemos mínimo desde BD
-    var deserializedProblems = new List<ProblemDynatraceResponse>(problems.Count);
+    // ✅ NO se pierde ninguna alerta si el JSON falla:
+    // si convertProblemJSON revienta o devuelve null, devolvemos un objeto mínimo (con campos de la tabla)
+    var deserializedProblems = problems
+        .Select(problem =>
+        {
+            try
+            {
+                var mapped = convertProblemJSON(problem);
+                if (mapped != null) return mapped;
+            }
+            catch (JsonException)
+            {
+                // cae al fallback
+            }
 
-    foreach (var problem in problems)
-    {
-        try
-        {
-            var mapped = convertProblemJSON(problem);
-            if (mapped != null)
-            {
-                deserializedProblems.Add(mapped);
-            }
-            else
-            {
-                deserializedProblems.Add(new ProblemDynatraceResponse
-                {
-                    tenant = problem.Tenant,
-                    environment = problem.Environment,
-                    problemId = problem.ProblemId,
-                    displayId = problem.DisplayId,
-                    title = problem.Title,
-                    shortDescription = problem.ShortDescription,
-                    impactLevel = problem.ImpactLevel,
-                    severityLevel = problem.SeverityLevel,
-                    status = problem.Status,
-                    jurisdiction = problem.Jurisdiction,
-                    startTime = problem.StartTime,
-                    endTime = problem.EndTime
-                });
-            }
-        }
-        catch (JsonException)
-        {
-            deserializedProblems.Add(new ProblemDynatraceResponse
+            // Fallback mínimo (usa los nombres EXACTOS de tu model: camelCase)
+            return new ProblemDynatraceResponse
             {
                 tenant = problem.Tenant,
                 environment = problem.Environment,
@@ -74,9 +60,9 @@ public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProb
                 jurisdiction = problem.Jurisdiction,
                 startTime = problem.StartTime,
                 endTime = problem.EndTime
-            });
-        }
-    }
+            };
+        })
+        .ToList();
 
     var response = new PagedResponse<ProblemDynatraceResponse>
     {
