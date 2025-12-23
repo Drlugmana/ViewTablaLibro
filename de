@@ -1,24 +1,26 @@
 [HttpGet("latest")]
 public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProblemsLatest(
-    [FromQuery] int pageNumber = 1,
-    [FromQuery] int pageSize = 50,
-    [FromQuery] string? jurisdiction = null
-)
+     [FromQuery] int pageNumber = 1,
+     [FromQuery] int pageSize = 50,
+     [FromQuery] string? jurisdiction = null
+ )
 {
-    // ✅ USAR UTC (clave del problema)
-    var startDate = DateTime.UtcNow.Date.AddDays(-1);
-    var endDate   = DateTime.UtcNow;
+    // AYER 00:00 (local server time)
+    var startDate = DateTime.Today.AddDays(-1);
+
+    // AHORA
+    var endDate = DateTime.Now;
 
     var baseQuery = _context.DynatraceProblems
         .AsNoTracking()
-        .Where(p => p.StartTime >= startDate && p.StartTime < endDate)
-        .Where(p => p.Status == "OPEN");
+        .Where(p => p.StartTime >= startDate && p.StartTime <= endDate);
 
     if (!string.IsNullOrWhiteSpace(jurisdiction))
     {
         baseQuery = baseQuery.Where(p => p.Jurisdiction == jurisdiction);
     }
 
+    // orden: más recientes primero
     baseQuery = baseQuery.OrderByDescending(p => p.StartTime);
 
     var totalRecords = await baseQuery.CountAsync();
@@ -28,12 +30,23 @@ public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProb
         .Take(pageSize)
         .ToListAsync();
 
+    // ✅ Mantener tu misma lógica de deserialización
     var deserializedProblems = problems
-        .Select(p => convertProblemJSON(p))
+        .Select(problem =>
+        {
+            try
+            {
+                return convertProblemJSON(problem); // <-- usa tu método existente
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+        })
         .Where(p => p != null)
         .ToList()!;
 
-    return new PagedResponse<ProblemDynatraceResponse>
+    var response = new PagedResponse<ProblemDynatraceResponse>
     {
         TotalRecords = totalRecords,
         TotalPages = (int)Math.Ceiling(totalRecords / (double)pageSize),
@@ -41,4 +54,6 @@ public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProb
         PageSize = pageSize,
         Data = deserializedProblems
     };
+
+    return response;
 }
