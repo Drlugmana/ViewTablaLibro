@@ -3,17 +3,17 @@ public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProb
      [FromQuery] int pageNumber = 1,
      [FromQuery] int pageSize = 50,
      [FromQuery] string? jurisdiction = null
- )
+)
 {
-    // AYER 00:00 (local server time)
-    var startDate = DateTime.Today.AddDays(-1);
+    // 🔧 AYER 00:00 (UTC)
+    var startDate = DateTime.UtcNow.Date.AddDays(-1);
 
-    // AHORA
-    var endDate = DateTime.Now;
+    // 🔧 AHORA (UTC)
+    var endDate = DateTime.UtcNow;
 
     var baseQuery = _context.DynatraceProblems
         .AsNoTracking()
-        .Where(p => p.StartTime >= startDate && p.StartTime <= endDate);
+        .Where(p => p.StartTime >= startDate && p.StartTime < endDate);
 
     if (!string.IsNullOrWhiteSpace(jurisdiction))
     {
@@ -30,13 +30,13 @@ public async Task<ActionResult<PagedResponse<ProblemDynatraceResponse>>> GetProb
         .Take(pageSize)
         .ToListAsync();
 
-    // ✅ Mantener tu misma lógica de deserialización
+    // ✅ MISMA lógica de deserialización (NO se toca)
     var deserializedProblems = problems
         .Select(problem =>
         {
             try
             {
-                return convertProblemJSON(problem); // <-- usa tu método existente
+                return convertProblemJSON(problem);
             }
             catch (JsonException)
             {
