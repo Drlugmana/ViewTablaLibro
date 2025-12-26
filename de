@@ -1,14 +1,15 @@
 function formatDateTimeDMY(date) {
-  if (!date) return "-";
+  if (!date) return "--";
+
   const d = new Date(date);
 
-  const fecha = d.toLocaleDateString("es-EC", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  });
+  // ✅ Fecha fija: DD/MM/YYYY
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  const fecha = `${dd}/${mm}/${yyyy}`;
 
-  // 🔥 Hora con AM/PM (igual como lo veías antes)
+  // ✅ Hora igual que antes (AM/PM)
   const hora = d.toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
@@ -18,6 +19,3 @@ function formatDateTimeDMY(date) {
 
   return `${fecha}, ${hora}`;
 }
-
-<strong>Inicio:</strong> {formatDateTimeDMY(start)}
-
