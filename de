@@ -1,21 +1,31 @@
-function formatDateTimeDMY(date) {
-  if (!date) return "--";
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <system.webServer>
 
-  const d = new Date(date);
+    <staticContent>
+      <remove fileExtension=".json" />
+      <mimeMap fileExtension=".json" mimeType="application/json" />
+    </staticContent>
 
-  // ✅ Fecha fija: DD/MM/YYYY
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yyyy = d.getFullYear();
-  const fecha = `${dd}/${mm}/${yyyy}`;
+    <rewrite>
+      <rules>
+        <!-- Proxy /api -> backend -->
+        <rule name="ProxyApi" stopProcessing="true">
+          <match url="^api/(.*)" ignoreCase="true" />
+          <action type="Rewrite" url="http://10.70.144.250:5000/api/{R:1}" />
+        </rule>
 
-  // ✅ Hora igual que antes (AM/PM)
-  const hora = d.toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
+        <!-- SPA fallback -->
+        <rule name="ReactSpa" stopProcessing="true">
+          <match url=".*" />
+          <conditions logicalGrouping="MatchAll">
+            <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="true" />
+            <add input="{REQUEST_FILENAME}" matchType="IsDirectory" negate="true" />
+          </conditions>
+          <action type="Rewrite" url="/index.html" />
+        </rule>
+      </rules>
+    </rewrite>
 
-  return `${fecha}, ${hora}`;
-}
+  </system.webServer>
+</configuration>
