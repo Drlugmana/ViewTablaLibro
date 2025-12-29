@@ -39,7 +39,7 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 // --- Base de datos
-var cs= builder.Configuration.GetConnectionString("Connection");
+var cs = builder.Configuration.GetConnectionString("Connection");
 builder.Services.AddDbContext<AppDbContext>(opt => opt.UseSqlServer(cs));
 
 var app = builder.Build();
@@ -51,7 +51,12 @@ app.UseCors("AllowFrontend");
 app.UseSwagger();
 app.UseSwaggerUI(c =>
 {
-    c.SwaggerEndpoint("/swagger/v1/swagger.json", "RestAPIDynatraceReportes v1");
+    // ✅ CLAVE 1: endpoint RELATIVO (evita problemas en IIS sub-aplicación)
+    c.SwaggerEndpoint("v1/swagger.json", "RestAPIDynatraceReportes v1");
+
+    // ✅ CLAVE 2: mejora compatibilidad (evita ciertos errores JS)
+    c.ConfigObject.AdditionalItems["syntaxHighlight"] = false;
+
     c.RoutePrefix = "swagger"; // UI en /swagger
 });
 
