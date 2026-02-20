@@ -1,24 +1,27 @@
 ---
-- name: Configure YUM repositories
-  hosts: all
+- name: Install packages on dev test prod
+  hosts: dev,test,prod
   become: yes
 
   tasks:
+    - name: Install php and mariadb
+      dnf:
+        name:
+          - php
+          - mariadb
+        state: present
 
-    - name: Create EX294_BASE repository
-      yum_repository:
-        name: EX294_BASE
-        description: EX294 base software
-        baseurl: http://content.example.com/rhel9.0/x86_64/dvd/BaseOS
-        gpgcheck: yes
-        gpgkey: http://content.example.com/rhel9.0/x86_64/dvd/RPM-GPG-KEY-redhat-release
-        enabled: yes
+- name: Install Development Tools and update dev
+  hosts: dev
+  become: yes
 
-    - name: Create EX294_STREAM repository
-      yum_repository:
-        name: EX294_STREAM
-        description: EX294 stream software
-        baseurl: http://content.example.com/rhel9.0/x86_64/dvd/AppStream
-        gpgcheck: yes
-        gpgkey: http://content.example.com/rhel9.0/x86_64/dvd/RPM-GPG-KEY-redhat-release
-        enabled: yes
+  tasks:
+    - name: Install Development Tools group
+      dnf:
+        name: "@Development Tools"
+        state: present
+
+    - name: Update all packages
+      dnf:
+        name: "*"
+        state: latest
