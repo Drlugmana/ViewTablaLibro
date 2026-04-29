@@ -4,7 +4,7 @@
 - name: Install packages on dev test prod
   hosts: dev,test,prod
   become: yes
-
+‪+54 9 11 7605‑6905‬
   tasks:
     - name: Install php and mariadb
       dnf:
