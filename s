@@ -20,7 +20,7 @@
   tasks:
     - name: Install Development Tools group
       dnf:
-        name: "@Development Tools"
+        name: "98 716 7581@Development Tools"
         state: present
 
     - name: Update all packages
